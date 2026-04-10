@@ -1,6 +1,6 @@
 # Tauri prototype for OpenHarmony/HarmonyNext
 
-![Logo](./fixture/screenshot_20260410_223517_com.chest.tauri_ohos_test.jpg)
+![Logo](./fixture/screenshot_20260410_235653_com.chest.tauri_ohos_test.jpg)
 
 ## Setup
 

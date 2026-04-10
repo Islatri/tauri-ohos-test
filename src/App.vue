@@ -3,20 +3,46 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getIdentifier, getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { appDataDir, homeDir, join, tempDir } from "@tauri-apps/api/path";
+import {
+  appDataDir,
+  basename,
+  BaseDirectory,
+  dirname,
+  extname,
+  homeDir,
+  join,
+  normalize,
+  resolve,
+  tempDir,
+} from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import {
+  copyFile,
+  exists,
+  mkdir,
+  readDir,
+  readTextFile,
+  remove,
+  rename,
+  stat,
+  writeTextFile,
+} from "@tauri-apps/plugin-fs";
 import {
   AppWindow,
   BookOpen,
   CheckCircle2,
   CircleDashed,
+  Database,
+  FileStack,
   FolderSearch,
   Hammer,
   MonitorCog,
   RefreshCcw,
   Rocket,
   Signal,
+  Sparkles,
+  Waypoints,
   XCircle,
 } from "lucide-vue-next";
 
@@ -37,6 +63,7 @@ interface TestCase {
 
 const reveal = ref(false);
 const launching = ref(false);
+const openingDocs = ref(false);
 const logLines = ref<string[]>([]);
 const testResults = ref<Record<string, TestResult>>({});
 
@@ -51,6 +78,14 @@ const unlistenList: UnlistenFn[] = [];
 onBeforeUnmount(() => {
   unlistenList.forEach((off) => off());
 });
+
+function fsProbeRootName(): string {
+  return "api-probe";
+}
+
+function fsStamp(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 const tests: TestCase[] = [
   {
@@ -90,6 +125,97 @@ const tests: TestCase[] = [
     },
   },
   {
+    id: "path-utils",
+    title: "Path Utility Roundtrip",
+    category: "path",
+    run: async () => {
+      const sample = await normalize("logs//runtime/../runtime/health.log");
+      const resolved = await resolve("logs", "runtime", "health.log");
+      const parent = await dirname(resolved);
+      const file = await basename(resolved);
+      const ext = await extname(resolved);
+
+      if (!sample.includes("runtime") || file !== "health.log" || ext !== "log") {
+        throw new Error("path utilities returned invalid output");
+      }
+
+      return `normalized=${sample} | parent=${parent}`;
+    },
+  },
+  {
+    id: "fs-write-read",
+    title: "FS Write + Read Text",
+    category: "fs",
+    run: async () => {
+      const dir = `${fsProbeRootName()}/${fsStamp()}`;
+      const file = `${dir}/sample.txt`;
+      const payload = `tauri-fs-probe-${Date.now()}`;
+
+      await mkdir(dir, { baseDir: BaseDirectory.AppData, recursive: true });
+      await writeTextFile(file, payload, { baseDir: BaseDirectory.AppData });
+      const readBack = await readTextFile(file, { baseDir: BaseDirectory.AppData });
+      await remove(dir, { baseDir: BaseDirectory.AppData, recursive: true });
+
+      if (readBack !== payload) {
+        throw new Error("filesystem readback mismatch");
+      }
+
+      return `readback ok (${readBack.length} chars)`;
+    },
+  },
+  {
+    id: "fs-copy-rename",
+    title: "FS Copy + Rename + Stat",
+    category: "fs",
+    run: async () => {
+      const dir = `${fsProbeRootName()}/${fsStamp()}`;
+      const src = `${dir}/a.txt`;
+      const copied = `${dir}/b.txt`;
+      const renamed = `${dir}/c.txt`;
+
+      await mkdir(dir, { baseDir: BaseDirectory.AppData, recursive: true });
+      await writeTextFile(src, "copy-rename-probe", { baseDir: BaseDirectory.AppData });
+      await copyFile(src, copied, { fromPathBaseDir: BaseDirectory.AppData, toPathBaseDir: BaseDirectory.AppData });
+      await rename(copied, renamed, { oldPathBaseDir: BaseDirectory.AppData, newPathBaseDir: BaseDirectory.AppData });
+      const fileInfo = await stat(renamed, { baseDir: BaseDirectory.AppData });
+      await remove(dir, { baseDir: BaseDirectory.AppData, recursive: true });
+
+      if (!fileInfo.isFile || fileInfo.size <= 0) {
+        throw new Error("filesystem stat validation failed");
+      }
+
+      return `renamed file size=${fileInfo.size}B`;
+    },
+  },
+  {
+    id: "fs-list-clean",
+    title: "FS List + Cleanup",
+    category: "fs",
+    run: async () => {
+      const dir = `${fsProbeRootName()}/${fsStamp()}`;
+      const file1 = `${dir}/one.txt`;
+      const file2 = `${dir}/two.txt`;
+
+      await mkdir(dir, { baseDir: BaseDirectory.AppData, recursive: true });
+      await Promise.all([
+        writeTextFile(file1, "one", { baseDir: BaseDirectory.AppData }),
+        writeTextFile(file2, "two", { baseDir: BaseDirectory.AppData }),
+      ]);
+
+      const entries = await readDir(dir, { baseDir: BaseDirectory.AppData });
+      const names = entries.map((it) => it.name).filter(Boolean) as string[];
+
+      await remove(dir, { baseDir: BaseDirectory.AppData, recursive: true });
+      const stillExists = await exists(dir, { baseDir: BaseDirectory.AppData });
+
+      if (!names.includes("one.txt") || !names.includes("two.txt") || stillExists) {
+        throw new Error("directory listing or cleanup check failed");
+      }
+
+      return `entries=${names.sort().join(",")}`;
+    },
+  },
+  {
     id: "event-loop",
     title: "Emit And Listen Event",
     category: "event",
@@ -98,14 +224,14 @@ const tests: TestCase[] = [
       const payload = `ok-${Date.now()}`;
       let off: UnlistenFn | undefined;
 
-      const received = new Promise<string>((resolve, reject) => {
+      const received = new Promise<string>((resolvePayload, rejectPayload) => {
         const timeoutId = setTimeout(() => {
-          reject(new Error("event timeout"));
+          rejectPayload(new Error("event timeout"));
         }, 1500);
 
         void listen<string>(eventName, (event) => {
           clearTimeout(timeoutId);
-          resolve(event.payload);
+          resolvePayload(event.payload);
         })
           .then((unlisten) => {
             off = unlisten;
@@ -114,7 +240,7 @@ const tests: TestCase[] = [
           })
           .catch((error: unknown) => {
             clearTimeout(timeoutId);
-            reject(error);
+            rejectPayload(error);
           });
       });
 
@@ -135,16 +261,54 @@ const tests: TestCase[] = [
   },
   {
     id: "window-info",
-    title: "Read Window Info",
+    title: "Read Window Metrics",
     category: "window",
     run: async () => {
       const appWindow = getCurrentWindow();
-      const [scale, size, fullscreen] = await Promise.all([
+      const [scale, size, outerSize, title] = await Promise.all([
         appWindow.scaleFactor(),
         appWindow.innerSize(),
-        appWindow.isFullscreen(),
+        appWindow.outerSize(),
+        appWindow.title(),
       ]);
-      return `label=${appWindow.label} | ${size.width}x${size.height} @${scale} | fullscreen=${fullscreen}`;
+      return `${title} | in:${size.width}x${size.height} out:${outerSize.width}x${outerSize.height} @${scale}`;
+    },
+  },
+  {
+    id: "window-title-roundtrip",
+    title: "Window Title Roundtrip",
+    category: "window",
+    run: async () => {
+      const appWindow = getCurrentWindow();
+      const original = await appWindow.title();
+      const patched = `${original} - probe`;
+
+      await appWindow.setTitle(patched);
+      const observed = await appWindow.title();
+      await appWindow.setTitle(original);
+
+      if (observed !== patched) {
+        throw new Error("window title roundtrip failed");
+      }
+
+      return `title set/restore ok (${original})`;
+    },
+  },
+  {
+    id: "parallel-batch",
+    title: "Parallel API Batch",
+    category: "core",
+    run: async () => {
+      const startedAt = performance.now();
+      const [version, name, appDir, temp, scale] = await Promise.all([
+        getVersion(),
+        getName(),
+        appDataDir(),
+        tempDir(),
+        getCurrentWindow().scaleFactor(),
+      ]);
+      const elapsed = Math.round(performance.now() - startedAt);
+      return `${name}@${version} | appDir=${appDir} | temp=${temp} | scale=${scale} | ${elapsed}ms`;
     },
   },
 ];
@@ -158,10 +322,12 @@ for (const item of tests) {
 
 const passCount = computed(() => Object.values(testResults.value).filter((it) => it.state === "pass").length);
 const failCount = computed(() => Object.values(testResults.value).filter((it) => it.state === "fail").length);
+const runningCount = computed(() => Object.values(testResults.value).filter((it) => it.state === "running").length);
+const doneCount = computed(() => passCount.value + failCount.value);
 
 function pushLog(message: string): void {
   const ts = new Date().toLocaleTimeString();
-  logLines.value = [`${ts}  ${message}`, ...logLines.value].slice(0, 30);
+  logLines.value = [`${ts}  ${message}`, ...logLines.value].slice(0, 40);
 }
 
 async function runSingle(test: TestCase): Promise<void> {
@@ -191,8 +357,27 @@ async function runAll(): Promise<void> {
   launching.value = false;
 }
 
+function fallbackOpenDocs(url: string): void {
+  const popup = window.open(url, "_blank", "noopener,noreferrer");
+  if (!popup) {
+    window.location.assign(url);
+  }
+}
+
 async function openDocs(): Promise<void> {
-  await openUrl("https://v2.tauri.app/reference/javascript/api/");
+  const docsUrl = "https://v2.tauri.app/reference/javascript/api/";
+  openingDocs.value = true;
+
+  try {
+    await openUrl(docsUrl);
+    pushLog("API Docs opened by opener plugin");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    pushLog(`API Docs opener failed: ${message}; fallback to web open`);
+    fallbackOpenDocs(docsUrl);
+  } finally {
+    openingDocs.value = false;
+  }
 }
 
 function resultBadge(state: TestState): string {
@@ -233,7 +418,7 @@ function stateLabel(state: TestState): string {
             API Test Board
           </h1>
           <p class="text-sm text-slate-600">
-            A compact dashboard to verify runtime connectivity for major Tauri JavaScript APIs.
+            Extended board for core, path, filesystem, event, and window capability verification.
           </p>
         </div>
 
@@ -241,11 +426,11 @@ function stateLabel(state: TestState): string {
           <button
             class="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:opacity-60"
             type="button"
-            :disabled="launching"
+            :disabled="launching || openingDocs"
             @click="openDocs"
           >
-            <BookOpen class="h-4 w-4" />
-            API Docs
+            <BookOpen class="h-4 w-4" :class="openingDocs ? 'animate-pulse' : ''" />
+            {{ openingDocs ? "Opening Docs" : "API Docs" }}
           </button>
           <button
             class="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-500"
@@ -259,7 +444,7 @@ function stateLabel(state: TestState): string {
         </div>
       </header>
 
-      <section class="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <section class="grid grid-cols-2 gap-3 md:grid-cols-5">
         <article class="rounded-2xl border border-slate-200 bg-slate-50 p-3">
           <p class="text-xs uppercase tracking-wide text-slate-500">Total</p>
           <p class="mt-1 text-2xl font-bold text-slate-900">{{ tests.length }}</p>
@@ -272,16 +457,17 @@ function stateLabel(state: TestState): string {
           <p class="text-xs uppercase tracking-wide text-rose-700">Fail</p>
           <p class="mt-1 text-2xl font-bold text-rose-700">{{ failCount }}</p>
         </article>
+        <article class="rounded-2xl border border-amber-200 bg-amber-50 p-3">
+          <p class="text-xs uppercase tracking-wide text-amber-700">Running</p>
+          <p class="mt-1 text-2xl font-bold text-amber-700">{{ runningCount }}</p>
+        </article>
         <article class="rounded-2xl border border-sky-200 bg-sky-50 p-3">
-          <p class="text-xs uppercase tracking-wide text-sky-700">Window</p>
-          <p class="mt-1 flex items-center gap-2 text-sm font-semibold text-sky-700">
-            <AppWindow class="h-4 w-4" />
-            main
-          </p>
+          <p class="text-xs uppercase tracking-wide text-sky-700">Done</p>
+          <p class="mt-1 text-2xl font-bold text-sky-700">{{ doneCount }}</p>
         </article>
       </section>
 
-      <section class="grid gap-3 lg:grid-cols-[1.4fr_1fr]">
+      <section class="grid gap-3 lg:grid-cols-[1.45fr_1fr]">
         <div class="space-y-3">
           <article
             v-for="test in tests"
@@ -330,27 +516,56 @@ function stateLabel(state: TestState): string {
           <article class="rounded-2xl border border-slate-200 bg-white p-4">
             <h3 class="flex items-center gap-2 text-sm font-semibold text-slate-800">
               <MonitorCog class="h-4 w-4" />
-              Runtime Notes
+              Coverage Scope
             </h3>
             <ul class="mt-3 space-y-2 text-sm text-slate-600">
               <li class="flex items-start gap-2">
-                <FolderSearch class="mt-0.5 h-4 w-4 text-sky-600" />
-                Path APIs validate environment and app data locations.
+                <Waypoints class="mt-0.5 h-4 w-4 text-sky-600" />
+                Path APIs validate runtime directories and path composition semantics.
               </li>
               <li class="flex items-start gap-2">
-                <Signal class="mt-0.5 h-4 w-4 text-amber-600" />
-                Event APIs verify message bus reachability.
+                <Database class="mt-0.5 h-4 w-4 text-emerald-600" />
+                FS APIs verify write, read, copy, rename, list and cleanup flows.
               </li>
               <li class="flex items-start gap-2">
-                <AppWindow class="mt-0.5 h-4 w-4 text-emerald-600" />
-                Window APIs validate current runtime window channel.
+                <AppWindow class="mt-0.5 h-4 w-4 text-amber-600" />
+                Window APIs validate metrics and title roundtrip behaviors.
+              </li>
+              <li class="flex items-start gap-2">
+                <Sparkles class="mt-0.5 h-4 w-4 text-violet-600" />
+                Parallel test probes batch-call stability under concurrent workloads.
               </li>
             </ul>
           </article>
 
+          <article class="rounded-2xl border border-slate-200 bg-white p-4">
+            <h3 class="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <FolderSearch class="h-4 w-4" />
+              API Mix
+            </h3>
+            <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
+              <p class="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 text-slate-700">
+                <FileStack class="h-3.5 w-3.5" />
+                Core + App
+              </p>
+              <p class="inline-flex items-center gap-1 rounded-lg bg-sky-100 px-2 py-1 text-sky-700">
+                <Waypoints class="h-3.5 w-3.5" />
+                Path
+              </p>
+              <p class="inline-flex items-center gap-1 rounded-lg bg-emerald-100 px-2 py-1 text-emerald-700">
+                <Database class="h-3.5 w-3.5" />
+                FS Plugin
+              </p>
+              <p class="inline-flex items-center gap-1 rounded-lg bg-amber-100 px-2 py-1 text-amber-700">
+                <AppWindow class="h-3.5 w-3.5" />
+                Window
+              </p>
+            </div>
+          </article>
+
           <article class="rounded-2xl border border-slate-200 bg-slate-900 p-4 text-slate-100">
             <h3 class="text-sm font-semibold">Execution Log</h3>
-            <div class="mt-3 max-h-64 space-y-2 overflow-auto pr-1">
+            <div class="mt-3 max-h-72 space-y-2 overflow-auto pr-1">
               <p v-if="logLines.length === 0" class="text-xs text-slate-300">No logs yet.</p>
               <p v-for="line in logLines" :key="line" class="text-xs leading-5 text-slate-300">
                 {{ line }}
