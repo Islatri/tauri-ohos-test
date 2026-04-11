@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { getIdentifier, getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -15,7 +16,8 @@ import {
   resolve,
   tempDir,
 } from "@tauri-apps/api/path";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getAllWindows, getCurrentWindow } from "@tauri-apps/api/window";
+import { getAllWebviewWindows, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   copyFile,
@@ -260,6 +262,38 @@ const tests: TestCase[] = [
     },
   },
   {
+    id: "window-registry",
+    title: "Window Registry Scan",
+    category: "window",
+    run: async () => {
+      const appWindow = getCurrentWindow();
+      const windows = await getAllWindows();
+      const labels = windows.map((window) => window.label);
+
+      if (!labels.includes(appWindow.label)) {
+        throw new Error("current window missing from registry");
+      }
+
+      return `windows=${labels.join(",")}`;
+    },
+  },
+  {
+    id: "webview-registry",
+    title: "Webview Registry Scan",
+    category: "webview",
+    run: async () => {
+      const currentWebview = getCurrentWebviewWindow();
+      const webviews = await getAllWebviewWindows();
+      const labels = webviews.map((webview) => webview.label);
+
+      if (!labels.includes(currentWebview.label)) {
+        throw new Error("current webview missing from registry");
+      }
+
+      return `webviews=${labels.join(",")}`;
+    },
+  },
+  {
     id: "window-info",
     title: "Read Window Metrics",
     category: "window",
@@ -272,6 +306,45 @@ const tests: TestCase[] = [
         appWindow.title(),
       ]);
       return `${title} | in:${size.width}x${size.height} out:${outerSize.width}x${outerSize.height} @${scale}`;
+    },
+  },
+  {
+    id: "core-file-url",
+    title: "Convert File Src",
+    category: "core",
+    run: async () => {
+      const demoPath = await join(await tempDir(), "api-probe", "preview.png");
+      const url = convertFileSrc(demoPath);
+
+      if (!url.includes("preview.png") || url === demoPath) {
+        throw new Error("file source conversion failed");
+      }
+
+      return url;
+    },
+  },
+  {
+    id: "window-flags",
+    title: "Window Flag Snapshot",
+    category: "window",
+    run: async () => {
+      const appWindow = getCurrentWindow();
+      const [fullscreen, minimized, maximized, focused, visible, decorated, resizable, maximizable, minimizable, closable, alwaysOnTop, theme] = await Promise.all([
+        appWindow.isFullscreen(),
+        appWindow.isMinimized(),
+        appWindow.isMaximized(),
+        appWindow.isFocused(),
+        appWindow.isVisible(),
+        appWindow.isDecorated(),
+        appWindow.isResizable(),
+        appWindow.isMaximizable(),
+        appWindow.isMinimizable(),
+        appWindow.isClosable(),
+        appWindow.isAlwaysOnTop(),
+        appWindow.theme(),
+      ]);
+
+      return `fullscreen=${fullscreen} minimized=${minimized} maximized=${maximized} focused=${focused} visible=${visible} decorated=${decorated} resizable=${resizable} maximizable=${maximizable} minimizable=${minimizable} closable=${closable} alwaysOnTop=${alwaysOnTop} theme=${theme ?? "null"}`;
     },
   },
   {
@@ -292,6 +365,51 @@ const tests: TestCase[] = [
       }
 
       return `title set/restore ok (${original})`;
+    },
+  },
+  {
+    id: "window-self-emit",
+    title: "Window Self Emit",
+    category: "event",
+    run: async () => {
+      const appWindow = getCurrentWindow();
+      const eventName = `window-self-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const payload = `bridge-${Date.now()}`;
+      let off: UnlistenFn | undefined;
+
+      const received = new Promise<string>((resolvePayload, rejectPayload) => {
+        const timeoutId = setTimeout(() => {
+          rejectPayload(new Error("window emit timeout"));
+        }, 1500);
+
+        void appWindow.listen<string>(eventName, (event) => {
+          clearTimeout(timeoutId);
+          resolvePayload(event.payload);
+        })
+          .then((unlisten) => {
+            off = unlisten;
+            unlistenList.push(unlisten);
+            return appWindow.emitTo(appWindow.label, eventName, payload);
+          })
+          .catch((error: unknown) => {
+            clearTimeout(timeoutId);
+            rejectPayload(error);
+          });
+      });
+
+      const actual = await received;
+      off?.();
+      if (off) {
+        const index = unlistenList.indexOf(off);
+        if (index >= 0) {
+          unlistenList.splice(index, 1);
+        }
+      }
+      if (actual !== payload) {
+        throw new Error(`window payload mismatch: ${actual}`);
+      }
+
+      return `window payload received: ${actual}`;
     },
   },
   {
@@ -529,11 +647,11 @@ function stateLabel(state: TestState): string {
               </li>
               <li class="flex items-start gap-2">
                 <AppWindow class="mt-0.5 h-4 w-4 text-amber-600" />
-                Window APIs validate metrics and title roundtrip behaviors.
+                Window APIs validate registry, flags, metrics and title roundtrip behaviors.
               </li>
               <li class="flex items-start gap-2">
                 <Sparkles class="mt-0.5 h-4 w-4 text-violet-600" />
-                Parallel test probes batch-call stability under concurrent workloads.
+                Webview registry, file source conversion and window event bridging verify concurrent workloads.
               </li>
             </ul>
           </article>
