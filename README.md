@@ -7,7 +7,7 @@
 1. Install tauri-cli and ohrs from git.
 
 ```bash
-cargo install tauri-cli --git https://github.com/islatri/tauri --branch feat/open-harmony
+cargo install tauri-cli --git https://github.com/tauri-apps/tauri --branch feat/open-harmony
 
 cargo install ohrs
 ```
