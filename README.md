@@ -1,6 +1,6 @@
 # Tauri prototype for OpenHarmony/HarmonyNext
 
-![Logo](./fixture/screenshot_20260411_154144_com.chest.tauri_ohos_test.jpg)
+![Image](./fixture/screenshot_20260415_005700_com.chest.tauri_ohos_test.jpg)
 
 ## Setup
 
@@ -39,4 +39,4 @@ cd src-tauri && cargo tauri ohos build
 
  1. `libentry.so` is a template library and you can ignore it.
  2. `RustAbility` will forward lifecycle automatically.
- 3. The frontend API test board currently covers core, app, path, filesystem, event, webview, and window APIs.
+ 3. The frontend API test board currently covers runtime(core), app, path, filesystem, event, webview, and window/monitor APIs.

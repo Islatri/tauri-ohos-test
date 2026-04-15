@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { getIdentifier, getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   appDataDir,
+  appCacheDir,
+  appConfigDir,
+  appLocalDataDir,
   basename,
   BaseDirectory,
   dirname,
@@ -16,7 +18,7 @@ import {
   resolve,
   tempDir,
 } from "@tauri-apps/api/path";
-import { getAllWindows, getCurrentWindow } from "@tauri-apps/api/window";
+import { availableMonitors, currentMonitor, getAllWindows, getCurrentWindow, primaryMonitor } from "@tauri-apps/api/window";
 import { getAllWebviewWindows, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -117,6 +119,18 @@ const tests: TestCase[] = [
     },
   },
   {
+    id: "core-runtime",
+    title: "Runtime Environment",
+    category: "core",
+    run: async () => {
+      const runningInTauri = isTauri();
+      if (!runningInTauri) {
+        throw new Error("not running inside tauri runtime");
+      }
+      return "isTauri=true";
+    },
+  },
+  {
     id: "path-basic",
     title: "Read Runtime Paths",
     category: "path",
@@ -142,6 +156,26 @@ const tests: TestCase[] = [
       }
 
       return `normalized=${sample} | parent=${parent}`;
+    },
+  },
+  {
+    id: "path-app-matrix",
+    title: "App Directory Matrix",
+    category: "path",
+    run: async () => {
+      const [config, data, localData, cache] = await Promise.all([
+        appConfigDir(),
+        appDataDir(),
+        appLocalDataDir(),
+        appCacheDir(),
+      ]);
+
+      const allValid = [config, data, localData, cache].every((path) => path.length > 0);
+      if (!allValid) {
+        throw new Error("empty app directory path detected");
+      }
+
+      return `config=${config} | data=${data} | localData=${localData} | cache=${cache}`;
     },
   },
   {
@@ -306,6 +340,36 @@ const tests: TestCase[] = [
         appWindow.title(),
       ]);
       return `${title} | in:${size.width}x${size.height} out:${outerSize.width}x${outerSize.height} @${scale}`;
+    },
+  },
+  {
+    id: "window-position",
+    title: "Read Window Positions",
+    category: "window",
+    run: async () => {
+      const appWindow = getCurrentWindow();
+      const [innerPos, outerPos] = await Promise.all([appWindow.innerPosition(), appWindow.outerPosition()]);
+      return `inner=(${innerPos.x},${innerPos.y}) outer=(${outerPos.x},${outerPos.y})`;
+    },
+  },
+  {
+    id: "window-monitors",
+    title: "Monitor Inventory",
+    category: "window",
+    run: async () => {
+      const [current, primary, monitors] = await Promise.all([
+        currentMonitor(),
+        primaryMonitor(),
+        availableMonitors(),
+      ]);
+
+      if (monitors.length === 0) {
+        throw new Error("no monitor info returned");
+      }
+
+      const currentName = current?.name ?? "unknown";
+      const primaryName = primary?.name ?? "unknown";
+      return `count=${monitors.length} current=${currentName} primary=${primaryName}`;
     },
   },
   {
@@ -639,7 +703,7 @@ function stateLabel(state: TestState): string {
             <ul class="mt-3 space-y-2 text-sm text-slate-600">
               <li class="flex items-start gap-2">
                 <Waypoints class="mt-0.5 h-4 w-4 text-sky-600" />
-                Path APIs validate runtime directories and path composition semantics.
+                Path APIs validate runtime directories, app directory matrix and path composition semantics.
               </li>
               <li class="flex items-start gap-2">
                 <Database class="mt-0.5 h-4 w-4 text-emerald-600" />
@@ -647,11 +711,11 @@ function stateLabel(state: TestState): string {
               </li>
               <li class="flex items-start gap-2">
                 <AppWindow class="mt-0.5 h-4 w-4 text-amber-600" />
-                Window APIs validate registry, flags, metrics and title roundtrip behaviors.
+                Window APIs validate registry, metrics, positions, monitor inventory and title roundtrip behaviors.
               </li>
               <li class="flex items-start gap-2">
                 <Sparkles class="mt-0.5 h-4 w-4 text-violet-600" />
-                Webview registry, file source conversion and window event bridging verify concurrent workloads.
+                Runtime detection, webview registry, file source conversion and window event bridging verify concurrent workloads.
               </li>
             </ul>
           </article>
