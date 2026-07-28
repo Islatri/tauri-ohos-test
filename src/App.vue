@@ -48,7 +48,7 @@ import {
   Sparkles,
   Waypoints,
   XCircle,
-} from "lucide-vue-next";
+} from "@lucide/vue";
 
 type TestState = "idle" | "running" | "pass" | "fail";
 

@@ -24,14 +24,14 @@ tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/open-harmo
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-napi-ohos = { version = "1.1" }
-napi-derive-ohos = "1.1"
+napi-ohos = { version = "1.2" }
+napi-derive-ohos = "1.2"
 tauri-plugin-fs = "2"
 
 
 [patch.crates-io]
-wry = { git = "https://github.com/richerfu/wry", rev = "814340ecf52e638ca84f300e5753e623fd040bd3" }
-tao = { git = "https://github.com/richerfu/tao", branch = "feat-ohos-webview" }
+wry = { git = "https://github.com/tauri-apps/wry", branch = "feat/open-harmony" }
+tao = { git = "https://github.com/tauri-apps/tao", branch = "feat/open-harmony" }
 openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git" }
 openharmony-ability-derive = { git = "https://github.com/harmony-contrib/openharmony-ability.git" }
 
@@ -39,16 +39,7 @@ openharmony-ability-derive = { git = "https://github.com/harmony-contrib/openhar
 tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/open-harmony" }
 tauri-runtime = { git = "https://github.com/tauri-apps/tauri", branch = "feat/open-harmony" }
 tauri-utils = { git = "https://github.com/tauri-apps/tauri", branch = "feat/open-harmony", features = [
-  "resources",
+    "resources",
 ] }
 tauri-macros = { git = "https://github.com/tauri-apps/tauri", branch = "feat/open-harmony" }
 tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", branch = "feat/open-harmony" }
-
-
-# tauri = { path = "../../../southorange/tauri/crates/tauri"}
-# tauri-runtime = { path = "../../../southorange/tauri/crates/tauri-runtime"}
-# tauri-utils = { path = "../../../southorange/tauri/crates/tauri-utils", features = [
-#   "resources",
-# ] }
-# tauri-macros = { path = "../../../southorange/tauri/crates/tauri-macros" }
-# tauri-runtime-wry = { path = "../../../southorange/tauri/crates/tauri-runtime-wry" }
